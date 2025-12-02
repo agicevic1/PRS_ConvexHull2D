@@ -6,8 +6,14 @@
 #include <random>
 #include <ctime>
 #include <chrono>
+#include <omp.h> 
 
 #define M_PI (4.0 * std::atan(1.0))
+
+// Ogranicavamo dubinu paralelizacije
+// Posto se svaka grana dijeli na 2, dubina 4 znaci do 16 niti (2^4)
+// Ako ima 8 jezgara, dubina 3 je optimalna
+#define MAX_PARALLEL_DEPTH 3
 
 using namespace std;
 
@@ -15,20 +21,17 @@ struct Point {
     double x, y;
 };
 
-// Vektorski proizvod (determinanta)
-// det > 0 C je lijevo od AB, det < 0 C je desno, det = 0 C je na liniji
 double cross(const Point& A, const Point& B, const Point& C) {
     return (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
 }
 
-// Udaljenost tacke od pravca AB (apsolutna vrijednost determinante)
 double distance(const Point& A, const Point& B, const Point& C) {
     return fabs(cross(A, B, C));
 }
 
-// Pronalazi tacku najudaljeniju od pravca AB
+// Ovu funkciju cemo pozivati serijski unutar rekurzije
 int farthestPoint(const vector<Point>& pts, const Point& A, const Point& B) {
-    double maxDist = 0;
+    double maxDist = -1.0;
     int idx = -1;
     for (int i = 0; i < pts.size(); i++) {
         double d = distance(A, B, pts[i]);
@@ -40,45 +43,71 @@ int farthestPoint(const vector<Point>& pts, const Point& A, const Point& B) {
     return idx;
 }
 
-// Rekurzivni QuickHull
-void quickHull(const vector<Point>& pts, const Point& A, const Point& B,
-    vector<Point>& hull) {
+// Rekurzivna funkcija sa 'depth' parametrom za kontrolu OpenMP sekcija
+vector<Point> quickHullRecursive(const vector<Point>& pts, const Point& A, const Point& B, int depth) {
+    vector<Point> resultHull;
 
     int idx = farthestPoint(pts, A, B);
+
     if (idx == -1) {
-        hull.push_back(B);
-        return;
+        resultHull.push_back(B);
+        return resultHull;
     }
 
     Point P = pts[idx];
 
     vector<Point> leftAP, leftPB;
-    leftAP.reserve(pts.size());
-    leftPB.reserve(pts.size());
+    leftAP.reserve(pts.size() / 2);
+    leftPB.reserve(pts.size() / 2);
 
     for (const Point& X : pts) {
-        // odredjujemo je li tacka lijevo od segmenta
         if (cross(A, P, X) > 0)
             leftAP.push_back(X);
         else if (cross(P, B, X) > 0)
             leftPB.push_back(X);
     }
 
-    quickHull(leftAP, A, P, hull);
-    quickHull(leftPB, P, B, hull);
+    vector<Point> hullLeft, hullRight;
 
-    if (hull.size() > 1 && hull.back().x == hull.front().x && hull.back().y == hull.front().y) hull.pop_back();  
+    // Ako nismo premasili dozvoljenu dubinu i imamo dovoljno tacaka, dijelimo posao na niti
+    if (depth < MAX_PARALLEL_DEPTH && pts.size() > 20000) {
+        // 'parallel sections' omogucava da razlicite niti rade razlicite blokove
+#pragma omp parallel sections
+        {
+#pragma omp section
+            {
+                hullLeft = quickHullRecursive(leftAP, A, P, depth + 1);
+            }
 
+#pragma omp section
+            {
+                hullRight = quickHullRecursive(leftPB, P, B, depth + 1);
+            }
+        }
+    }
+    else {
+        // Ako smo duboko u rekurziji, nastavljamo serijski (brze je nego praviti nove niti)
+        hullLeft = quickHullRecursive(leftAP, A, P, depth + 1);
+        hullRight = quickHullRecursive(leftPB, P, B, depth + 1);
+    }
+
+    // Spajanje rezultata (ovo mora serijski)
+    resultHull.insert(resultHull.end(), hullLeft.begin(), hullLeft.end());
+    resultHull.insert(resultHull.end(), hullRight.begin(), hullRight.end());
+
+    if (resultHull.size() > 1 && resultHull.back().x == resultHull.front().x && resultHull.back().y == resultHull.front().y) resultHull.pop_back();   //////
+
+
+    return resultHull;
 }
 
-// Glavna funkcija: vraca konveksni omotac
-vector<Point> quickHull2D(const vector<Point> &pts) {   
-    vector<Point> hull;
-    if (pts.size() < 3)
-        return pts;
+vector<Point> quickHull2D(const vector<Point>& pts) {
+    if (pts.size() < 3) return pts;
 
-    // Pronadji krajnju lijevu i krajnju desnu tacku
     int minX = 0, maxX = 0;
+    double minVal = pts[0].x;
+    double maxVal = pts[0].x;
+
     for (int i = 1; i < pts.size(); i++) {
         if (pts[i].x < pts[minX].x) minX = i;
         if (pts[i].x > pts[maxX].x) maxX = i;
@@ -88,25 +117,45 @@ vector<Point> quickHull2D(const vector<Point> &pts) {
     Point B = pts[maxX];
 
     vector<Point> leftSet, rightSet;
+    leftSet.reserve(pts.size());
+    rightSet.reserve(pts.size());
+
+    // Podjela na gornji i donji skup
     for (int i = 0; i < pts.size(); i++) {
         if (i == minX || i == maxX) continue;
-
-        if (cross(A, B, pts[i]) > 0)
-            leftSet.push_back(pts[i]);
-        else
-            rightSet.push_back(pts[i]);
+        if (cross(A, B, pts[i]) > 0) leftSet.push_back(pts[i]);
+        else rightSet.push_back(pts[i]);
     }
 
-    hull.push_back(A);
-    quickHull(leftSet, A, B, hull);
-    quickHull(rightSet, B, A, hull);
+    vector<Point> finalHull;
+    finalHull.push_back(A);
 
-    return hull;
+    vector<Point> h1, h2;
+
+    // Prvi nivo paralelizacije: Jedna nit radi gornji dio, druga donji dio
+
+#pragma omp parallel sections
+    {
+#pragma omp section
+        {
+            h1 = quickHullRecursive(leftSet, A, B, 1);
+        }
+#pragma omp section
+        {
+            h2 = quickHullRecursive(rightSet, B, A, 1);
+        }
+    }
+
+    finalHull.insert(finalHull.end(), h1.begin(), h1.end());
+    finalHull.insert(finalHull.end(), h2.begin(), h2.end());
+
+    return finalHull;
 }
 
-// Primjer koristenja
 int main() {
-    
+    // Moramo eksplicitno dozvoliti da nit napravi nove niti 
+    omp_set_nested(1);
+
     // najgori slucaj
     const int N = 10000000;
     const double MIN_R = 200.0; // Minimalna udaljenost od centra
@@ -156,8 +205,7 @@ int main() {
     std::cout << "MAX vrijeme:      " << maxVrijeme << " ms\n";
     std::cout << "PROSJECNO vrijeme: " << ukupnoVrijeme / brojIteracija << " ms\n";
     std::cout << "===========================================\n";
-    
+
 
     return 0;
 }
-   
