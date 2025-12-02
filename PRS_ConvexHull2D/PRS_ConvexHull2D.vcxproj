@@ -129,7 +129,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="quickHullOpenMP.cpp" />
+    <None Include="quickHullOpenMP.cpp" />
+    <ClCompile Include="quickHullSIMD.cpp" />
     <None Include="main_seq_examples.cpp" />
     <None Include="main_seq.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
