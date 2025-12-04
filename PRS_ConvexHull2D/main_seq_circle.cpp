@@ -1,163 +1,186 @@
 #include <iostream>
 #include <vector>
-#include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <random>
-#include <ctime>
-#include <chrono>
-
-#define M_PI (4.0 * std::atan(1.0))
+#include <algorithm> 
+#include <random>    
+#include <ctime>     
 
 using namespace std;
+
+const double PI = 4.0 * atan(1.0);
+const double EPSILON = 1e-13;
 
 struct Point {
     double x, y;
 };
 
-// Vektorski proizvod (determinanta)
-// det > 0 C je lijevo od AB, det < 0 C je desno, det = 0 C je na liniji
-double cross(const Point& A, const Point& B, const Point& C) {
-    return (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+// Globalni kontejner za rezultat (rezervisemo ga unaprijed)
+vector<Point> hull;
+
+// inline: Eliminise trosak funkcijskog poziva (function call overhead) za kriticne male operacije koje se izvrsavaju unutar petlji
+inline double crossProduct(const Point& a, const Point& b, const Point& p) {
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
-// Udaljenost tacke od pravca AB (apsolutna vrijednost determinante)
-double distance(const Point& A, const Point& B, const Point& C) {
-    return fabs(cross(A, B, C));
-}
+// startPtr: Pokazivac na prvi element niza
+// endPtr:   Pokazivac IZA posljednjeg elementa
+void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Point p2) {
 
-// Pronalazi tacku najudaljeniju od pravca AB
-int farthestPoint(const vector<Point>& pts, const Point& A, const Point& B) {
-    double maxDist = 0;
-    int idx = -1;
-    for (int i = 0; i < pts.size(); i++) {
-        double d = distance(A, B, pts[i]);
-        if (d > maxDist) {
-            maxDist = d;
-            idx = i;
+    // Ako nema tacaka u opsegu, bezi napolje
+    if (startPtr >= endPtr) return;
+
+    Point* max_ptr = nullptr;
+    double max_dist = -1.0;
+
+    // 1. Trazimo najudaljeniju tacku (Linearni prolaz)
+    // Koristimo ++curr (pointer aritmetiku) jer je brza od points[i]
+    for (Point* curr = startPtr; curr < endPtr; ++curr) {
+        double d = crossProduct(p1, p2, *curr);
+        if (d > max_dist) {
+            max_dist = d;
+            max_ptr = curr;
         }
     }
-    return idx;
+
+    // Ako nismo nasli tacku (sve su unutar trougla ili blizu linije)
+    if (max_ptr == nullptr || max_dist < EPSILON) return;
+
+    Point c = *max_ptr;
+    hull.push_back(c);
+
+    // Najveci problem brzine je provjera "da li je trenutna tacka jednaka C"
+    // Rjesenje: Zamijenimo tacku C sa prvom tackom u nizu
+    // I onda petlju krecemo od druge tacke. Tako garantovano ne nailazimo na C
+    std::iter_swap(startPtr, max_ptr);
+
+    // Nasa radna memorija sada krece od startPtr + 1
+    Point* workerStart = startPtr + 1;
+
+    // --- BRZO PARTICIONISANJE (DVA PROLAZA) ---
+
+    // Faza 1: Skupi tacke koje su lijevo od P1 -> C
+    // 'left_pivot' je granica dokle smo naslagali dobre tacke
+    Point* left_pivot = workerStart;
+
+    for (Point* curr = workerStart; curr < endPtr; ++curr) {
+
+        if (crossProduct(p1, c, *curr) > EPSILON) {
+            std::iter_swap(curr, left_pivot);
+            left_pivot++;
+        }
+    }
+
+    // Rekurzija za lijevi trougao
+    // Opseg: [workerStart, left_pivot)
+    findHullOptimized(workerStart, left_pivot, p1, c);
+
+    // Faza 2: Skupi tacke koje su lijevo od C -> P2
+    // Trazimo ih u ostatku niza: od left_pivot do endPtr
+    Point* right_pivot = left_pivot;
+
+    for (Point* curr = left_pivot; curr < endPtr; ++curr) {
+
+        if (crossProduct(c, p2, *curr) > EPSILON) {
+            std::iter_swap(curr, right_pivot);
+            right_pivot++;
+        }
+    }
+
+    // Rekurzija za desni trougao
+    // Opseg: [left_pivot, right_pivot)
+    findHullOptimized(left_pivot, right_pivot, c, p2);
 }
 
-// Rekurzivni QuickHull
-void quickHull(const vector<Point>& pts, const Point& A, const Point& B,
-    vector<Point>& hull) {
+void quickHull(vector<Point>& points) {
+    // 1. Reset
+    hull.clear();
+    size_t n = points.size();
+    if (n < 3) return;
 
-    int idx = farthestPoint(pts, A, B);
-    if (idx == -1) {
-        hull.push_back(B);
-        return;
+    // Rezervacija je kljucna da se hull vektor ne bi realocirao
+    hull.reserve(n);
+
+    // 2. Nalazenje Min i Max X
+    size_t min_idx = 0;
+    size_t max_idx = 0;
+
+    // Brzi prolaz
+    for (size_t i = 1; i < n; i++) {
+        if (points[i].x < points[min_idx].x) min_idx = i;
+        if (points[i].x > points[max_idx].x) max_idx = i;
     }
 
-    Point P = pts[idx];
+    Point pA = points[min_idx];
+    Point pB = points[max_idx];
 
-    vector<Point> leftAP, leftPB;
-    leftAP.reserve(pts.size());
-    leftPB.reserve(pts.size());
+    hull.push_back(pA);
+    hull.push_back(pB);
 
-    for (const Point& X : pts) {
-        // odredjujemo je li tacka lijevo od segmenta
-        if (cross(A, P, X) > 0)
-            leftAP.push_back(X);
-        else if (cross(P, B, X) > 0)
-            leftPB.push_back(X);
+    // Moramo skloniti pA i pB da nam ne smetaju u petljama
+    // Stavljamo pA na indeks 0, pB na indeks 1
+
+    std::swap(points[0], points[min_idx]);
+    // Ako je max bio na 0, sada je na min_idx mjestu
+    if (max_idx == 0) max_idx = min_idx;
+    std::swap(points[1], points[max_idx]);
+
+    // Pointeri za rad
+    Point* start = &points[0];
+    Point* workerStart = start + 2; // Krecemo od indeksa 2
+    Point* end = start + n;
+
+    // 1. Izdvajamo "Gornji" skup (Lijevo od A->B)
+    Point* split_point = workerStart;
+    for (Point* curr = workerStart; curr < end; ++curr) {
+        if (crossProduct(pA, pB, *curr) > EPSILON) {
+            std::iter_swap(curr, split_point);
+            split_point++;
+        }
     }
 
-    quickHull(leftAP, A, P, hull);
-    quickHull(leftPB, P, B, hull);
+    // Poziv rekurzije za gornji dio
+    findHullOptimized(workerStart, split_point, pA, pB);
 
-    if (hull.size() > 1 && hull.back().x == hull.front().x && hull.back().y == hull.front().y) hull.pop_back();  
+    // 2. Izdvajamo "Donji" skup (Desno od A->B, tj. Lijvo od B->A)
+    Point* split_point_2 = split_point;
+    for (Point* curr = split_point; curr < end; ++curr) {
+        // Koristimo < -EPSILON za desnu stranu
+        if (crossProduct(pA, pB, *curr) < -EPSILON) {
+            std::iter_swap(curr, split_point_2);
+            split_point_2++;
+        }
+    }
 
+    // Poziv rekurzije za donji dio (obrnut redoslijed tacaka linije)
+    findHullOptimized(split_point, split_point_2, pB, pA);
 }
 
-// Glavna funkcija: vraca konveksni omotac
-vector<Point> quickHull2D(const vector<Point> &pts) {   
-    vector<Point> hull;
-    if (pts.size() < 3)
-        return pts;
-
-    // Pronadji krajnju lijevu i krajnju desnu tacku
-    int minX = 0, maxX = 0;
-    for (int i = 1; i < pts.size(); i++) {
-        if (pts[i].x < pts[minX].x) minX = i;
-        if (pts[i].x > pts[maxX].x) maxX = i;
-    }
-
-    Point A = pts[minX];
-    Point B = pts[maxX];
-
-    vector<Point> leftSet, rightSet;
-    for (int i = 0; i < pts.size(); i++) {
-        if (i == minX || i == maxX) continue;
-
-        if (cross(A, B, pts[i]) > 0)
-            leftSet.push_back(pts[i]);
-        else
-            rightSet.push_back(pts[i]);
-    }
-
-    hull.push_back(A);
-    quickHull(leftSet, A, B, hull);
-    quickHull(rightSet, B, A, hull);
-
-    return hull;
-}
-
-// Primjer koristenja
 int main() {
-    
-    // najgori slucaj
-    const int N = 10000000;
-    const double MIN_R = 200.0; // Minimalna udaljenost od centra
-    const double MAX_R = 500.0; // Maksimalna udaljenost od centra
+    // --- GENERISANJE PODATAKA ---
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0.0, 2.0 * PI);
 
-    double minVrijeme = 1e9;
-    double maxVrijeme = 0.0;
-    double ukupnoVrijeme = 0.0;
-    int brojIteracija = 1;
+    int N = 10000;
+    double radius = 100000000.0;
 
-    for (int i = 0; i < brojIteracija; i++) {
-        std::vector<Point> tacke;
-        tacke.reserve(N);
-        // Priprema generatora nasumicnih brojeva
-        std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
-        // Definisemo opseg za R (od MIN_R do MAX_R)
-        std::uniform_real_distribution<double> dist_r(MIN_R, MAX_R);
-        // Za svaku tacku generisemo novi, nasumicni radijus
-        double current_R = dist_r(rng);
-        //std::cout << "Izabran radijus za ovu iteraciju: " << current_R << "\n";
-        for (int i = 0; i < N; i++) {
-            // Ugao ostaje pravilan (kako bi tacke isle u krug)
-            double angle = (2 * M_PI * i) / N;
-            double x = current_R * cos(angle);
-            double y = current_R * sin(angle);
-            tacke.push_back({ x, y });
-        }
-        auto start = std::chrono::high_resolution_clock::now();
-        std::vector<Point> hull = quickHull2D(tacke);
-        auto end = std::chrono::high_resolution_clock::now();
-        double trajanje = std::chrono::duration<double, std::milli>(end - start).count();
-        //std::cout << "Generisano: " << N << " random tacaka\n";
-        //std::cout << "Hull ima: " << hull.size() << " tacaka\n";
-        //std::cout << "Vrijeme: " << trajanje << " ms\n";
+    cout << "Generisanje " << N << " tacaka..." << endl;
+    vector<Point> points;
+    points.reserve(N);
 
-        if (trajanje < minVrijeme) minVrijeme = trajanje;
-        if (trajanje > maxVrijeme) maxVrijeme = trajanje;
-        ukupnoVrijeme += trajanje;
+    for (int i = 0; i < N; i++) {
+        double angle = dis(gen);
+        points.push_back({ radius * cos(angle), radius * sin(angle) });
     }
 
-    // Ispis rezultata
-    std::cout << "\n================ REZULTATI ================\n";
-    std::cout << "Broj iteracija: " << brojIteracija << endl;
-    std::cout << "Broj tacaka:    " << N << endl;
-    std::cout << "-------------------------------------------\n";
-    std::cout << "MIN vrijeme:      " << minVrijeme << " ms\n";
-    std::cout << "MAX vrijeme:      " << maxVrijeme << " ms\n";
-    std::cout << "PROSJECNO vrijeme: " << ukupnoVrijeme / brojIteracija << " ms\n";
-    std::cout << "===========================================\n";
-    
+    clock_t start = clock();
+    quickHull(points);
+    clock_t end = clock();
+
+    double elapsed_secs = double(end - start) / CLOCKS_PER_SEC;
+
+    cout << "Vrijeme: " << elapsed_secs << " sekundi" << endl;
+    cout << "Tacaka u omotacu: " << hull.size() << endl;
 
     return 0;
 }
-   
