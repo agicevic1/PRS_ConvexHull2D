@@ -1,0 +1,21 @@
+# Ignorisi build foldere
+x64/
+x86/
+Debug/
+Release/
+build/
+bin/
+obj/
+
+# Ignorisi Visual Studio privremene fajlove
+.vs/
+*.user
+*.suo
+*.db
+*.opensdf
+*.sdf
+ipch/
+
+# Ignorisi Windows sistemske fajlove
+Thumbs.db
+Desktop.ini

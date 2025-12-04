@@ -1,7 +1,0 @@
-﻿  main_seq_circle.cpp
-C:\Users\HP\Desktop\PRS_ConvexHull2D\PRS_ConvexHull2D\main_seq_circle.cpp(115,79): warning C4244: 'argument': conversion from '_Rep' to 'unsigned int', possible loss of data
-          with
-          [
-              _Rep=__int64
-          ]
-  PRS_ConvexHull2D.vcxproj -> C:\Users\HP\Desktop\PRS_ConvexHull2D\x64\Debug\PRS_ConvexHull2D.exe
