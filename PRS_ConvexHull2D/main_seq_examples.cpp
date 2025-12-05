@@ -1,121 +1,171 @@
 #include <iostream>
 #include <vector>
-#include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <random>
-#include <ctime>
+#include <algorithm> 
+#include <random>    
+#include <ctime> 
 #include <chrono>
 
-#define M_PI (4.0 * std::atan(1.0))
-
 using namespace std;
+
+const double PI = 4.0 * atan(1.0);
+const double EPSILON = 1e-13;
 
 struct Point {
     double x, y;
 };
 
-// Vektorski proizvod (determinanta)
-// det > 0 C je lijevo od AB, det < 0 C je desno, det = 0 C je na liniji
-double cross(const Point& A, const Point& B, const Point& C) {
-    return (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+vector<Point> hull;
+
+// inline: Eliminise trosak funkcijskog poziva (function call overhead) za kriticne male operacije koje se izvrsavaju unutar petlji
+inline double crossProduct(const Point& a, const Point& b, const Point& p) {
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
-// Udaljenost tacke od pravca AB (apsolutna vrijednost determinante)
-double distance(const Point& A, const Point& B, const Point& C) {
-    return fabs(cross(A, B, C));
-}
+// startPtr: Pokazivac na prvi element niza
+// endPtr:   Pokazivac IZA posljednjeg elementa
+void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Point p2) {
 
-// Pronalazi tacku najudaljeniju od pravca AB
-int farthestPoint(const vector<Point>& pts, const Point& A, const Point& B) {
-    double maxDist = 0;
-    int idx = -1;
-    for (int i = 0; i < pts.size(); i++) {
-        double d = distance(A, B, pts[i]);
-        if (d > maxDist) {
-            maxDist = d;
-            idx = i;
+    // Ako nema tacaka u opsegu
+    if (startPtr >= endPtr) return;
+
+    Point* max_ptr = nullptr;
+    double max_dist = -1.0;
+
+    // 1. Trazimo najudaljeniju tacku
+    // Koristimo pointer aritmetiku jer je brza od points[i]
+    for (Point* curr = startPtr; curr < endPtr; ++curr) {
+        double d = crossProduct(p1, p2, *curr);
+        if (d > max_dist) {
+            max_dist = d;
+            max_ptr = curr;
         }
     }
-    return idx;
+
+    // Ako nismo nasli tacku (sve su unutar trougla ili blizu linije)
+    if (max_ptr == nullptr || max_dist < EPSILON) return;
+
+    Point c = *max_ptr;
+    hull.push_back(c);
+
+    // Najveci problem brzine je provjera da li je trenutna tacka jednaka C
+    // Zamijenimo tacku C sa prvom tackom u nizu
+    // I onda petlju krecemo od druge tacke. Tako garantovano ne nailazimo na C
+    std::iter_swap(startPtr, max_ptr);
+
+    // Nasa radna memorija sada krece od startPtr + 1
+    Point* workerStart = startPtr + 1;
+
+    // --- BRZO PARTICIONISANJE (DVA PROLAZA) ---
+
+    // Faza 1: Skupi tacke koje su lijevo od P1 -> C
+    // 'left_pivot' je granica dokle smo naslagali dobre tacke
+    Point* left_pivot = workerStart;
+
+    for (Point* curr = workerStart; curr < endPtr; ++curr) {
+
+        if (crossProduct(p1, c, *curr) > EPSILON) {
+            std::iter_swap(curr, left_pivot);
+            left_pivot++;
+        }
+    }
+
+    // Rekurzija za lijevi trougao
+    // Opseg: [workerStart, left_pivot)
+    findHullOptimized(workerStart, left_pivot, p1, c);
+
+    // Faza 2: Skupi tacke koje su lijevo od C -> P2
+    // Trazimo ih u ostatku niza: od left_pivot do endPtr
+    Point* right_pivot = left_pivot;
+
+    for (Point* curr = left_pivot; curr < endPtr; ++curr) {
+
+        if (crossProduct(c, p2, *curr) > EPSILON) {
+            std::iter_swap(curr, right_pivot);
+            right_pivot++;
+        }
+    }
+
+    // Rekurzija za desni trougao
+    // Opseg: [left_pivot, right_pivot)
+    findHullOptimized(left_pivot, right_pivot, c, p2);
 }
 
-// Rekurzivni QuickHull
-void quickHull(const vector<Point>& pts, const Point& A, const Point& B,
-    vector<Point>& hull) {
+void quickHull(vector<Point>& points) {
+    // 1. Reset
+    hull.clear();
+    size_t n = points.size();
+    if (n < 3) return;
 
-    int idx = farthestPoint(pts, A, B);
-    if (idx == -1) {
-        hull.push_back(B);
-        return;
+    // Rezervacija je kljucna da se hull vektor ne bi realocirao
+    hull.reserve(n);
+
+    // 2. Nalazenje Min i Max X
+    size_t min_idx = 0;
+    size_t max_idx = 0;
+
+    for (size_t i = 1; i < n; i++) {
+        if (points[i].x < points[min_idx].x) min_idx = i;
+        if (points[i].x > points[max_idx].x) max_idx = i;
     }
 
-    Point P = pts[idx];
+    Point pA = points[min_idx];
+    Point pB = points[max_idx];
 
-    vector<Point> leftAP, leftPB;
-    leftAP.reserve(pts.size());
-    leftPB.reserve(pts.size());
+    hull.push_back(pA);
+    hull.push_back(pB);
 
-    for (const Point& X : pts) {
-        // odredjujemo je li tacka lijevo od segmenta
-        if (cross(A, P, X) > 0)
-            leftAP.push_back(X);
-        else if (cross(P, B, X) > 0)
-            leftPB.push_back(X);
+    // Moramo skloniti pA i pB da nam ne smetaju u petljama
+    // Stavljamo pA na indeks 0, pB na indeks 1
+
+    std::swap(points[0], points[min_idx]);
+    // Ako je max bio na 0, sada je na min_idx mjestu
+    if (max_idx == 0) max_idx = min_idx;
+    std::swap(points[1], points[max_idx]);
+
+    // Pointeri za rad
+    Point* start = &points[0];
+    Point* workerStart = start + 2; // Krecemo od indeksa 2
+    Point* end = start + n;
+
+    // 1. Izdvajamo "Gornji" skup (Lijevo od A->B)
+    Point* split_point = workerStart;
+    for (Point* curr = workerStart; curr < end; ++curr) {
+        if (crossProduct(pA, pB, *curr) > EPSILON) {
+            std::iter_swap(curr, split_point);
+            split_point++;
+        }
     }
 
-    quickHull(leftAP, A, P, hull);
-    quickHull(leftPB, P, B, hull);
+    // Poziv rekurzije za gornji dio
+    findHullOptimized(workerStart, split_point, pA, pB);
 
-    if (hull.size() > 1 && hull.back().x == hull.front().x && hull.back().y == hull.front().y) hull.pop_back();
+    // 2. Izdvajamo "Donji" skup (Desno od A->B, tj. Lijevo od B->A)
+    Point* split_point_2 = split_point;
+    for (Point* curr = split_point; curr < end; ++curr) {
+        // Koristimo < -EPSILON za desnu stranu
+        if (crossProduct(pA, pB, *curr) < -EPSILON) {
+            std::iter_swap(curr, split_point_2);
+            split_point_2++;
+        }
+    }
 
+    // Poziv rekurzije za donji dio (obrnut redoslijed tacaka linije)
+    findHullOptimized(split_point, split_point_2, pB, pA);
 }
 
-// Glavna funkcija: vraca konveksni omotac
-vector<Point> quickHull2D(const vector<Point> &pts) {
-    vector<Point> hull;
-    if (pts.size() < 3)
-        return pts;
-
-    // Pronadji krajnju lijevu i krajnju desnu tacku
-    int minX = 0, maxX = 0;
-    for (int i = 1; i < pts.size(); i++) {
-        if (pts[i].x < pts[minX].x) minX = i;
-        if (pts[i].x > pts[maxX].x) maxX = i;
-    }
-
-    Point A = pts[minX];
-    Point B = pts[maxX];
-
-    vector<Point> leftSet, rightSet;
-    for (int i = 0; i < pts.size(); i++) {
-        if (i == minX || i == maxX) continue;
-
-        if (cross(A, B, pts[i]) > 0)
-            leftSet.push_back(pts[i]);
-        else
-            rightSet.push_back(pts[i]);
-    }
-
-    hull.push_back(A);
-    quickHull(leftSet, A, B, hull);
-    quickHull(rightSet, B, A, hull);
-
-    return hull;
-}
-
-// Primjeri koristenja
 int main() {
 
+    // PRIMJER 1 za provjeru ispravnosti
     //Input: points[] = { {0, 3}, {1, 1}, {2, 2}, {4, 4}, {0, 0}, {1, 2}, {3, 1}, {3, 3} };
     //Output:  The points in convex hull are : (0, 0) (0, 3) (3, 1) (4, 4)
     vector<Point> t1 = { {0, 3}, {1, 1}, {2, 2}, {4, 4}, {0, 0}, {1, 2}, {3, 1}, {3, 3} };
-    vector<Point> h1 = quickHull2D(t1);
+    quickHull(t1);
     cout << "Konveksni omotac1: " << endl;
-    for (auto& p : h1)
+    for (auto& p : hull)
         cout << "(" << p.x << ", " << p.y << ")\n";
 
-    // Input primjer 2
+    // PRIMJER 2
     // Input: points[] = { (16, 3), (12, 17), (0, 6), (-4, -6), (16, 6), (16, -7), (16, -3),
     //              (17, -4), (5, 19), (19, -8), (3, 16), (12, 13), (3, -4), (17, 5),
     //              (-3, 15), (-3, -9), (0, 11), (-9, -3), (-4, -2), (12, 10) }
@@ -124,10 +174,11 @@ int main() {
                          {16, -3}, {17, -4}, {5, 19}, {19, -8}, {3, 16}, {12, 13},
                          {3, -4}, {17, 5}, {-3, 15}, {-3, -9}, {0, 11}, {-9, -3},
                          {-4, -2}, {12, 10} };
-    vector<Point> h2 = quickHull2D(t2);
+    quickHull(t2);
     cout << "Konveksni omotac2: " << endl;
-    for (auto& p : h2)
+    for (auto& p : hull)
         cout << "(" << p.x << ", " << p.y << ")\n";
+
 
     return 0;
 }
