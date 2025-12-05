@@ -24,12 +24,12 @@
     <None Include="main_seq_circle.cpp">
       <Filter>Source Files</Filter>
     </None>
-    <None Include="quickHullOpenMP.cpp">
+    <None Include="quickHullSIMD.cpp">
       <Filter>Source Files</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="quickHullSIMD.cpp">
+    <ClCompile Include="quickHullOpenMP.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
