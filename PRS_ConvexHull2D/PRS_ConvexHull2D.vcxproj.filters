@@ -27,9 +27,12 @@
     <None Include="quickHullSIMD.cpp">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="quickHullOpenMP.cpp">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="quickHullOpenMP.cpp">
+    <ClCompile Include="ompSIMD.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

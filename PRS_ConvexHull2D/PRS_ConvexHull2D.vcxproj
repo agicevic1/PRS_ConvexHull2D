@@ -129,7 +129,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="quickHullOpenMP.cpp" />
+    <ClCompile Include="ompSIMD.cpp" />
+    <None Include="quickHullOpenMP.cpp" />
     <None Include="quickHullSIMD.cpp" />
     <None Include="main_seq_examples.cpp" />
     <None Include="main_seq.cpp">
