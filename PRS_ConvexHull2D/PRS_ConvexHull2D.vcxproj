@@ -129,14 +129,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ompSIMD.cpp" />
+    <None Include="ompSIMD.cpp" />
     <None Include="quickHullOpenMP.cpp" />
     <None Include="quickHullSIMD.cpp" />
     <None Include="main_seq_examples.cpp" />
-    <None Include="main_seq.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
-    </None>
     <None Include="main_seq_circle.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main_seq.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

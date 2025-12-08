@@ -17,13 +17,15 @@ struct Point {
 
 vector<Point> hull;
 
+// Vektorski proizvod (determinanta)
+// det > 0 => p je lijevo od AB, det < 0 => p je desno, det = 0 => p je na AB
 // inline: Eliminise trosak funkcijskog poziva (function call overhead) za kriticne male operacije koje se izvrsavaju unutar petlji
 inline double crossProduct(const Point& a, const Point& b, const Point& p) {
     return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
 // startPtr: Pokazivac na prvi element niza
-// endPtr:   Pokazivac IZA posljednjeg elementa
+// endPtr:   Pokazivac iza posljednjeg elementa
 void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Point p2) {
 
     // Ako nema tacaka u opsegu
@@ -32,7 +34,7 @@ void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Poi
     Point* max_ptr = nullptr;
     double max_dist = -1.0;
 
-    // 1. Trazimo najudaljeniju tacku 
+    // Trazimo najudaljeniju tacku 
     // Koristimo ++curr (pointer aritmetiku) jer je brza od points[i]
     for (Point* curr = startPtr; curr < endPtr; ++curr) {
         double d = crossProduct(p1, p2, *curr);
@@ -55,8 +57,6 @@ void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Poi
 
     // Nasa radna memorija sada krece od startPtr + 1
     Point* workerStart = startPtr + 1;
-
-    // --- BRZO PARTICIONISANJE (DVA PROLAZA) ---
 
     // Faza 1: Skupi tacke koje su lijevo od P1 -> C
     // 'left_pivot' je granica dokle smo naslagali dobre tacke
@@ -92,7 +92,6 @@ void findHullOptimized(Point* startPtr, Point* endPtr, const Point p1, const Poi
 }
 
 void quickHull(vector<Point>& points) {
-    // 1. Reset
     hull.clear();
     size_t n = points.size();
     if (n < 3) return;
@@ -100,10 +99,9 @@ void quickHull(vector<Point>& points) {
     // Rezervacija je kljucna da se hull vektor ne bi realocirao
     hull.reserve(n);
 
-    // 2. Nalazenje Min i Max X
+    // Pronalazenje tacaka sa min i max X koordinatom
     size_t min_idx = 0;
     size_t max_idx = 0;
-
     for (size_t i = 1; i < n; i++) {
         if (points[i].x < points[min_idx].x) min_idx = i;
         if (points[i].x > points[max_idx].x) max_idx = i;
@@ -111,24 +109,20 @@ void quickHull(vector<Point>& points) {
 
     Point pA = points[min_idx];
     Point pB = points[max_idx];
-
-    hull.push_back(pA);
+    hull.push_back(pA);   // Ove dvije tacke su sigurno dio omotaca
     hull.push_back(pB);
 
-    // Moramo skloniti pA i pB da nam ne smetaju u petljama
-    // Stavljamo pA na indeks 0, pB na indeks 1
-
+    // Pomjeranje min i max na prva dva mjesta
     std::swap(points[0], points[min_idx]);
-    // Ako je max bio na 0, sada je na min_idx mjestu
-    if (max_idx == 0) max_idx = min_idx;
+    if (max_idx == 0) max_idx = min_idx;   // Ako je max bio na 0, sada je na min_idx mjestu
     std::swap(points[1], points[max_idx]);
 
-    // Pointeri za rad
+    // Definisemo radni opseg (preskacemo prve dvije tacke)
     Point* start = &points[0];
     Point* workerStart = start + 2; // Krecemo od indeksa 2
     Point* end = start + n;
 
-    // 1. Izdvajamo "Gornji" skup (Lijevo od A->B)
+    // Inicijalna podjela na gornji i donji skup tacaka
     Point* split_point = workerStart;
     for (Point* curr = workerStart; curr < end; ++curr) {
         if (crossProduct(pA, pB, *curr) > EPSILON) {
@@ -137,10 +131,10 @@ void quickHull(vector<Point>& points) {
         }
     }
 
-    // Poziv rekurzije za gornji dio
+    // Obrada gornjeg dijela (lijevo od A->B)
     findHullOptimized(workerStart, split_point, pA, pB);
 
-    // 2. Izdvajamo "Donji" skup (Desno od A->B, tj. Lijevo od B->A)
+    // Donji skup, tacke desno od AB (odnosno lijevo od BA)
     Point* split_point_2 = split_point;
     for (Point* curr = split_point; curr < end; ++curr) {
         // Koristimo < -EPSILON za desnu stranu
@@ -150,23 +144,24 @@ void quickHull(vector<Point>& points) {
         }
     }
 
-    // Poziv rekurzije za donji dio (obrnut redoslijed tacaka linije)
+    // Obrada donjeg dijela (lijevo od B->A)
     findHullOptimized(split_point, split_point_2, pB, pA);
 }
 
 int main() {
-
+    // Podesavanje generatora slucajnih brojeva
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<> dis(0.0, 2.0 * PI);
 
-    int N = 1000000;
+    int N = 100000;
     double radius = 10000000.0;
 
-    cout << "Generisanje " << N << " tacaka..." << endl;
+    cout << "Generisanje " << N << " tacaka" << endl;
     vector<Point> points;
     points.reserve(N);
 
+    // Generisanje tacaka na kruznici (najgori slucaj za Convex Hull)
     for (int i = 0; i < N; i++) {
         double angle = dis(gen);
         points.push_back({ radius * cos(angle), radius * sin(angle) });

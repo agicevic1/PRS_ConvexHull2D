@@ -18,21 +18,21 @@
     <None Include="main_seq_examples.cpp">
       <Filter>Source Files</Filter>
     </None>
-    <None Include="main_seq.cpp">
-      <Filter>Source Files</Filter>
-    </None>
     <None Include="main_seq_circle.cpp">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="quickHullSIMD.cpp">
       <Filter>Source Files</Filter>
     </None>
     <None Include="quickHullOpenMP.cpp">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="quickHullSIMD.cpp">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="ompSIMD.cpp">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ompSIMD.cpp">
+    <ClCompile Include="main_seq.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

@@ -1,234 +1,243 @@
-/*#include <iostream>
+#include <iostream>
 #include <vector>
-#include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <random>
+#include <algorithm>
+#include <random>    
 #include <ctime>
 #include <chrono>
 #include <immintrin.h> 
 
-#define M_PI (4.0 * std::atan(1.0))
-
 using namespace std;
+
+const double PI = 4.0 * std::atan(1.0);
+const double EPSILON = 1e-13;
 
 struct Point {
     double x, y;
 };
 
-// skalarni cross proizvod 
-inline double cross(const Point& A, const Point& B, const Point& C) {
-    return (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+// Vektorski proizvod
+inline double crossProduct(const Point& a, const Point& b, const Point& p) {
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
-// SIMD optimizovana funkcija za pronalazak najudaljenije tacke
-int farthestPointAVX(const vector<Point>& pts, const Point& A, const Point& B) {
-    int maxIdx = -1;
-    double maxDist = -1.0;
+// Trazimo najudaljeniju tacku provjeravajuci po 4 tacke odjednom
+inline Point* findMaxSimd(Point* startPtr, Point* endPtr,
+    const Point& p1, const Point& p2, double& out_max)
+{
+    __m256d ax = _mm256_set1_pd(p1.x);
+    __m256d ay = _mm256_set1_pd(p1.y);
+    __m256d bx = _mm256_set1_pd(p2.x);
+    __m256d by = _mm256_set1_pd(p2.y);
 
-    size_t n = pts.size();
-    size_t i = 0;
+    // Vektor razlike (B - A)
+    __m256d dx = _mm256_sub_pd(bx, ax);
+    __m256d dy = _mm256_sub_pd(by, ay);
 
-    // Priprema konstanti za vektorizaciju
-    // Formula cross produkta: (Bx-Ax)*(Py-Ay) - (By-Ay)*(Px-Ax)
-    double d_BA_x = B.x - A.x;
-    double d_BA_y = B.y - A.y;
+    // inicijalizacija maksimuma na veoma mali broj
+    __m256d maxVal = _mm256_set1_pd(-1e300);
+    __m256i maxIndex = _mm256_setzero_si256();
 
-    // Popunjavamo registre istim vrijednostima
-    __m256d v_BA_x = _mm256_set1_pd(d_BA_x);
-    __m256d v_BA_y = _mm256_set1_pd(d_BA_y);
-    __m256d v_A_x = _mm256_set1_pd(A.x);
-    __m256d v_A_y = _mm256_set1_pd(A.y);
+    Point* base = startPtr;
+    int index = 0;
 
-    // Maska za apsolutnu vrijednost (brisanje znaka)
-    __m256d v_sign_mask = _mm256_set1_pd(-0.0);
+    for (Point* curr = startPtr; curr + 4 <= endPtr; curr += 4, index += 4)
+    {
+        // Ucitavanje 4 x i 4 y koordinate u registre odjednom
+        __m256d px = _mm256_set_pd(curr[3].x, curr[2].x, curr[1].x, curr[0].x);
+        __m256d py = _mm256_set_pd(curr[3].y, curr[2].y, curr[1].y, curr[0].y);
 
-    // Trenutni maksimum u vektorskom obliku (sve nule na pocetku)
-    __m256d v_maxDist = _mm256_set1_pd(-1.0);
+        // Racunanje (P - A)
+        __m256d px2 = _mm256_sub_pd(px, ax);
+        __m256d py2 = _mm256_sub_pd(py, ay);
 
-    // Procesiramo 4 tacke odjednom (4 * 2 double-a = 256 bita po X i Y)
-    // Struktura u memoriji je: x0 y0 x1 y1 x2 y2 x3 y3 ...
-    for (; i + 3 < n; i += 4) {
-        // Ucita 4 tacke (8 double-ova) u dva registra
-        __m256d r1 = _mm256_loadu_pd(&pts[i].x);     // x0 y0 x1 y1
-        __m256d r2 = _mm256_loadu_pd(&pts[i + 2].x); // x2 y2 x3 y3
+        // Vektorski proizvod: cross = dx * py2 - dy * px2
+        __m256d cross1 = _mm256_mul_pd(dx, py2);
+        __m256d cross2 = _mm256_mul_pd(dy, px2);
+        __m256d cross = _mm256_sub_pd(cross1, cross2);
 
-        // Raspakivanje: Trebaju nam svi X-ovi u jednom, svi Y-ovi u drugom registru
-        // 1. Permutacija 128-bitnih blokova: r1_low, r2_low -> x0 y0 x2 y2
-        __m256d t1 = _mm256_permute2f128_pd(r1, r2, 0x20);
-        // 2. Permutacija: r1_high, r2_high -> x1 y1 x3 y3
-        __m256d t2 = _mm256_permute2f128_pd(r1, r2, 0x31);
+        // Poredjenje da li je trenutni cross veci od maxVal
+        __m256d cmp = _mm256_cmp_pd(cross, maxVal, _CMP_GT_OQ);
 
-        // 3. Unpack: dobijamo ciste X i Y vektore
-        __m256d v_Px = _mm256_unpacklo_pd(t1, t2); // x0 x1 x2 x3
-        __m256d v_Py = _mm256_unpackhi_pd(t1, t2); // y0 y1 y2 y3
+        // Azuriranje maxVal tamo gdje je uslov ispunjen
+        maxVal = _mm256_blendv_pd(maxVal, cross, cmp);
 
-        // Racunanje: dy = (Py - Ay)
-        __m256d v_diff_y = _mm256_sub_pd(v_Py, v_A_y);
-        // Racunanje: dx = (Px - Ax)
-        __m256d v_diff_x = _mm256_sub_pd(v_Px, v_A_x);
+        // Azuriranje indeksa, pamtimo indeks ako je vrijednost veca
+        __m256i idx = _mm256_set_epi64x(index + 3, index + 2, index + 1, index);
+        maxIndex = _mm256_blendv_epi8(maxIndex, idx, _mm256_castpd_si256(cmp));
+    }
 
-        // Term 1: (Bx - Ax) * dy
-        __m256d term1 = _mm256_mul_pd(v_BA_x, v_diff_y);
-        // Term 2: (By - Ay) * dx
-        __m256d term2 = _mm256_mul_pd(v_BA_y, v_diff_x);
+    // Izvlacenje rezultata iz AVX registara nazad u obicne nizove
+    double vals[4];
+    long long idxs[4];
 
-        // Cross product: term1 - term2
-        __m256d v_cross = _mm256_sub_pd(term1, term2);
+    _mm256_storeu_pd(vals, maxVal);
+    _mm256_storeu_si256((__m256i*)idxs, maxIndex);
 
-        // Absolutna vrijednost (Distance): andnot sa maskom znaka
-        __m256d v_dist = _mm256_andnot_pd(v_sign_mask, v_cross);
+    // Trazimo koji od 4 kandidata je stvarni maksimum
+    double finalMax = -1e300;
+    long long best = -1;
 
-        // Optimizacija: Provjeravamo da li je BILO KOJA od 4 distance veca od trenutnog globalnog max-a
-        // _mm256_cmp_pd vraca masku bitova
-        __m256d v_cmp = _mm256_cmp_pd(v_dist, v_maxDist, _CMP_GT_OQ);
+    for (int i = 0; i < 4; i++)
+        if (vals[i] > finalMax) {
+            finalMax = vals[i];
+            best = idxs[i];
+        }
 
-        // movemask prebacuje sign bitove u int. Ako je != 0, nasli smo novi maksimum.
-        if (_mm256_movemask_pd(v_cmp)) {
-            // Izvlacenje rezultata u privremeni niz da azuriramo max
-            double res[4];
-            _mm256_storeu_pd(res, v_dist);
+    Point* bestPtr = nullptr;
+    if (best >= 0) {
+        bestPtr = base + best;
+        out_max = finalMax;
+    }
 
-            for (int k = 0; k < 4; ++k) {
-                if (res[k] > maxDist) {
-                    maxDist = res[k];
-                    maxIdx = i + k;
-                    // Azuriramo i vektorski max 
-                    v_maxDist = _mm256_set1_pd(maxDist);
-                }
-            }
+    // Obrada preostalih tacaka
+    for (Point* curr = startPtr + ((endPtr - startPtr) & ~3ULL);
+        curr < endPtr; curr++)
+    {
+        double d = crossProduct(p1, p2, *curr);
+        if (d > out_max) {
+            out_max = d;
+            bestPtr = curr;
         }
     }
 
-    // Ostatak (ako broj tacaka nije deljiv sa 4, rjesavamo skalarno)
-    for (; i < n; i++) {
-        double d = std::abs(cross(A, B, pts[i]));
-        if (d > maxDist) {
-            maxDist = d;
-            maxIdx = i;
+    return bestPtr;
+}
+
+// --- GLAVNA REKURZIVNA FUNKCIJA ---
+void findHullRecursive(Point* startPtr, Point* endPtr, const Point p1, const Point p2, vector<Point>& output) {
+
+    // Bazni slucaj, nema vise tacaka u opsegu
+    if (startPtr >= endPtr) return;
+
+    double max_dist = -1.0;
+
+    // Pozivamo SIMD funkciju da nadje tacku c najudaljeniju od linije p1-p2
+    Point* max_ptr = findMaxSimd(startPtr, endPtr, p1, p2, max_dist);
+
+    // Ako nema tacaka sa pozitivnim rastojanjem, zavrsavamo
+    if (max_ptr == nullptr || max_dist < EPSILON) return;
+
+    Point c = *max_ptr;
+    output.push_back(c);  // Dodajemo tacku u rjesenje
+
+    // Stavljamo nadjenu tacku na pocetak opsega i iskljucujemo je iz dalje pretrage
+    std::iter_swap(startPtr, max_ptr);
+    Point* workerStart = startPtr + 1;
+
+    // Particionisanje za lijevi podskup
+    // Sve tacke koje su lijevo od linije p1->c prebacujemo na pocetak niza
+    Point* left_pivot = workerStart;
+    for (Point* curr = workerStart; curr < endPtr; ++curr) {
+        if (crossProduct(p1, c, *curr) > EPSILON) {
+            std::iter_swap(curr, left_pivot);
+            left_pivot++;
         }
     }
 
-    return maxIdx;
-}
+    // Rekurzivni poziv za lijevi skup
+    findHullRecursive(workerStart, left_pivot, p1, c, output);
 
-// Rekurzivni QuickHull
-void quickHull(const vector<Point>& pts, const Point& A, const Point& B,
-    vector<Point>& hull) {
-
-    // KORISTIMO NOVU SIMD FUNKCIJU
-    int idx = farthestPointAVX(pts, A, B);
-
-    if (idx == -1) {
-        hull.push_back(B);
-        return;
-    }
-
-    Point P = pts[idx];
-
-    vector<Point> leftAP, leftPB;
-    leftAP.reserve(pts.size() / 2); 
-    leftPB.reserve(pts.size() / 2);
-
-    for (const Point& X : pts) {
-        double c1 = cross(A, P, X);
-        if (c1 > 0) {
-            leftAP.push_back(X);
-            continue;
+    // Particionisanje za desni podskup
+    // Sve tacke koje su lijevo od linije c->p2 prebacujemo iza lijevog skupa
+    Point* right_pivot = left_pivot;
+    for (Point* curr = left_pivot; curr < endPtr; ++curr) {
+        if (crossProduct(c, p2, *curr) > EPSILON) {
+            std::iter_swap(curr, right_pivot);
+            right_pivot++;
         }
-
-        // Ako nije lijevo od AP, tek onda proveravamo PB
-        double c2 = cross(P, B, X);
-        if (c2 > 0)
-            leftPB.push_back(X);
     }
 
-    quickHull(leftAP, A, P, hull);
-    quickHull(leftPB, P, B, hull);
-
+    // Rekurzivni poziv za desni skup
+    findHullRecursive(left_pivot, right_pivot, c, p2, output);
 }
 
-// Glavna funkcija: vraca konveksni omotac
-vector<Point> quickHull2D(const vector<Point>& pts) {
-    vector<Point> hull;
-    if (pts.size() < 3)
-        return pts;
+// QUICKHULL POKRETAC
+void quickHull(vector<Point>& points, vector<Point>& final_hull) {
+    final_hull.clear();
+    size_t n = points.size();
+    if (n < 3) return;
 
-    // Pronadji krajnju lijevu i krajnju desnu tacku
-    int minX = 0, maxX = 0;
-    for (int i = 1; i < pts.size(); i++) {
-        if (pts[i].x < pts[minX].x) minX = i;
-        if (pts[i].x > pts[maxX].x) maxX = i;
+    final_hull.reserve(n);
+
+    // Pronalazenje tacaka sa min i max X koordinatom
+    size_t min_idx = 0;
+    size_t max_idx = 0;
+    for (size_t i = 1; i < n; i++) {
+        if (points[i].x < points[min_idx].x) min_idx = i;
+        if (points[i].x > points[max_idx].x) max_idx = i;
     }
 
-    Point A = pts[minX];
-    Point B = pts[maxX];
+    Point pA = points[min_idx];
+    Point pB = points[max_idx];
+    final_hull.push_back(pA);  // Ove dvije tacke su sigurno dio omotaca
+    final_hull.push_back(pB);
 
-    vector<Point> leftSet, rightSet;
-    leftSet.reserve(pts.size());
-    rightSet.reserve(pts.size());
+    // Pomjeranje min i max na prva dva mjesta
+    std::swap(points[0], points[min_idx]);
+    if (max_idx == 0) max_idx = min_idx; // Korekcija ako je max bio na poziciji 0
+    std::swap(points[1], points[max_idx]);
 
-    for (int i = 0; i < pts.size(); i++) {
-        if (i == minX || i == maxX) continue;
+    // Definisemo radni opseg (preskacemo prve dvije tacke)
+    Point* start = &points[0];
+    Point* workerStart = start + 2;
+    Point* end = start + n;
 
-        if (cross(A, B, pts[i]) > 0)
-            leftSet.push_back(pts[i]);
-        else
-            rightSet.push_back(pts[i]);
+    // Inicijalna podjela na gornji i donji skup tacaka
+    Point* split_point = workerStart;
+    for (Point* curr = workerStart; curr < end; ++curr) {
+        if (crossProduct(pA, pB, *curr) > EPSILON) {
+            std::iter_swap(curr, split_point);
+            split_point++;
+        }
     }
 
-    hull.push_back(A);
-    quickHull(leftSet, A, B, hull);
-    quickHull(rightSet, B, A, hull);
+    // Donji skup, tacke desno od AB (odnosno lijevo od BA)
+    Point* split_point_2 = split_point;
+    for (Point* curr = split_point; curr < end; ++curr) {
+        if (crossProduct(pA, pB, *curr) < -EPSILON) {
+            std::iter_swap(curr, split_point_2);
+            split_point_2++;
+        }
+    }
 
-    return hull;
+    // Obrada gornjeg dijela (lijevo od A->B)
+    findHullRecursive(workerStart, split_point, pA, pB, final_hull);
+
+    // Obrada donjeg dijela (lijevo od B->A)
+    findHullRecursive(split_point, split_point_2, pB, pA, final_hull);
 }
 
 int main() {
-    const int N = 10000000;
-    const double MIN_R = 200.0;
-    const double MAX_R = 500.0;
+    // Podesavanje generatora slucajnih brojeva
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0.0, 2.0 * PI);
 
-    double minVrijeme = 1e9;
-    double maxVrijeme = 0.0;
-    double ukupnoVrijeme = 0.0;
-    int brojIteracija = 1; 
+    int N = 100000;
+    double radius = 10000000.0;
 
-    for (int iter = 0; iter < brojIteracija; iter++) {
-        std::vector<Point> tacke;
-        tacke.reserve(N);
-        std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
-        std::uniform_real_distribution<double> dist_r(MIN_R, MAX_R);
-        double current_R = dist_r(rng);
+    cout << "Generisanje " << N << " tacaka" << endl;
+    vector<Point> points;
+    points.reserve(N);
 
-        for (int i = 0; i < N; i++) {
-            double angle = (2 * M_PI * i) / N;
-            double x = current_R * cos(angle);
-            double y = current_R * sin(angle);
-            tacke.push_back({ x, y });
-        }
-
-        auto start = std::chrono::high_resolution_clock::now();
-        std::vector<Point> hull = quickHull2D(tacke);
-        auto end = std::chrono::high_resolution_clock::now();
-
-        double trajanje = std::chrono::duration<double, std::milli>(end - start).count();
-
-        if (trajanje < minVrijeme) minVrijeme = trajanje;
-        if (trajanje > maxVrijeme) maxVrijeme = trajanje;
-        ukupnoVrijeme += trajanje;
-
-        //std::cout << "Iteracija " << iter + 1 << ": " << trajanje << " ms" << std::endl;
+    // Generisanje tacaka na kruznici (najgori slucaj za Convex Hull)
+    for (int i = 0; i < N; i++) {
+        double angle = dis(gen);
+        points.push_back({ radius * cos(angle), radius * sin(angle) });
     }
 
-    std::cout << "\n================ REZULTATI (SIMD AVX2) ================\n";
-    std::cout << "Broj iteracija: " << brojIteracija << endl;
-    std::cout << "Broj tacaka:    " << N << endl;
-    std::cout << "-------------------------------------------\n";
-    std::cout << "MIN vrijeme:      " << minVrijeme << " ms\n";
-    std::cout << "MAX vrijeme:      " << maxVrijeme << " ms\n";
-    std::cout << "PROSJECNO vrijeme: " << ukupnoVrijeme / brojIteracija << " ms\n";
-    std::cout << "===========================================\n";
+    vector<Point> result_hull;
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    quickHull(points, result_hull);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed_time = std::chrono::duration<double, std::milli>(end - start).count();
+
+    cout << "Vrijeme: " << elapsed_time << " ms" << endl;
+    cout << "Tacaka u omotacu: " << result_hull.size() << endl;
 
     return 0;
-}*/
+}
